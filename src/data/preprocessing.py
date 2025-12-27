@@ -30,7 +30,8 @@ class ContextKeyExtractor:
     Extracts context keys from question_ids based on dataset-specific rules.
     
     This ensures that sampling is performed at the appropriate granularity
-    (e.g., per story for TGQA, per Wikipedia page for TimeQA).
+    (e.g., per story for TGQA, per Wikipedia page for TimeQA, per entity for TempReason,
+    per question for tot_semantic_test).
     """
     
     @staticmethod
@@ -54,6 +55,8 @@ class ContextKeyExtractor:
             return ContextKeyExtractor._extract_timeqa_context(question_id)
         elif dataset_type == "tempreason":
             return ContextKeyExtractor._extract_tempreason_context(question_id)
+        elif dataset_type == "tot_semantic":
+            return ContextKeyExtractor._extract_tot_semantic_context(question_id)
         else:
             # Fallback: use the entire question_id as context
             logger.warning(f"Unknown dataset type for '{dataset_name}', using full question_id as context")
@@ -70,6 +73,8 @@ class ContextKeyExtractor:
             return "timeqa"
         elif "tempreason" in dataset_name_lower or "_l2" in dataset_name_lower or "_l3" in dataset_name_lower:
             return "tempreason"
+        elif "tot_semantic" in dataset_name_lower:
+            return "tot_semantic"
         else:
             return "unknown"
     
@@ -121,6 +126,24 @@ class ContextKeyExtractor:
         
         logger.warning(f"Could not parse TempReason question_id: {question_id}")
         return f"tempreason_unknown_{question_id[:20]}"
+    
+    @staticmethod
+    def _extract_tot_semantic_context(question_id: str) -> str:
+        """
+        Extract context from tot_semantic_test question_id.
+        Format: A single number as a string (e.g., "0", "1", "9", "09")
+        Example: "0" -> "0", "09" -> "09" (they are different contexts)
+        
+        Note: The question_id is already the context key itself.
+        Empty strings are treated as a separate context.
+        """
+        # The question_id IS the context - it's already a single number string
+        # We preserve the exact string representation to distinguish "9" from "09"
+        if question_id == "":
+            return "tot_semantic_empty"
+        
+        # Return the question_id as-is to preserve distinction between "0", "00", "9", "09", etc.
+        return question_id
 
 
 class HierarchicalSampler:
@@ -298,6 +321,9 @@ class TISERPreprocessor:
         """
         Group data hierarchically by dataset and context.
         
+        Note: This function also deduplicates exact duplicate records to avoid
+        sampling issues.
+        
         Args:
             data: List of data samples
             
@@ -306,9 +332,29 @@ class TISERPreprocessor:
         """
         logger.info("Grouping data hierarchically...")
         
-        hierarchical_data = defaultdict(lambda: defaultdict(list))
+        # First, deduplicate exact duplicates using hash
+        import hashlib
+        seen_hashes = set()
+        deduplicated_data = []
+        duplicates_removed = 0
         
         for sample in data:
+            sample_str = json.dumps(sample, sort_keys=True, ensure_ascii=False)
+            sample_hash = hashlib.sha256(sample_str.encode()).hexdigest()
+            
+            if sample_hash not in seen_hashes:
+                seen_hashes.add(sample_hash)
+                deduplicated_data.append(sample)
+            else:
+                duplicates_removed += 1
+        
+        if duplicates_removed > 0:
+            logger.info(f"Removed {duplicates_removed} exact duplicate records")
+        
+        # Now group the deduplicated data
+        hierarchical_data = defaultdict(lambda: defaultdict(list))
+        
+        for sample in deduplicated_data:
             dataset_name = sample.get('dataset_name', 'unknown')
             question_id = sample.get('question_id', '')
             
@@ -421,16 +467,30 @@ class TISERPreprocessor:
         """
         logger.info("\nValidating sampled data...")
         
+        # Create unique identifiers using JSON serialization hash
+        # This handles cases where question_id alone is not unique
+        def make_unique_id(sample):
+            # Create a stable hash from the entire sample
+            import hashlib
+            # Sort keys to ensure consistent ordering
+            sample_str = json.dumps(sample, sort_keys=True, ensure_ascii=False)
+            return hashlib.sha256(sample_str.encode()).hexdigest()
+        
         # Check that all samples are from the original data
-        original_ids = {sample['question_id'] for sample in original_data}
-        sampled_ids = {sample['question_id'] for sample in sampled_data}
+        original_ids = {make_unique_id(sample) for sample in original_data}
+        sampled_ids = {make_unique_id(sample) for sample in sampled_data}
         
         if not sampled_ids.issubset(original_ids):
-            raise ValueError("Sampled data contains question_ids not in original data")
+            raise ValueError("Sampled data contains samples not in original data")
         
-        # Check for duplicates
+        # Check for duplicates in sampled data
         if len(sampled_ids) != len(sampled_data):
-            raise ValueError("Sampled data contains duplicate question_ids")
+            # Count actual duplicates for debugging
+            from collections import Counter
+            id_counter = Counter([make_unique_id(s) for s in sampled_data])
+            duplicates = {k: v for k, v in id_counter.items() if v > 1}
+            logger.error(f"Found {len(duplicates)} duplicate samples")
+            raise ValueError("Sampled data contains duplicate samples")
         
         # Check dataset distribution
         original_dist = self._get_dataset_distribution(original_data)

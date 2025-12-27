@@ -147,9 +147,10 @@ cython_debug/
 
 # Project-specific
 # Data files (uncomment if data should not be committed)
-src/data/raw/TISER_train.json
-src/data/raw/TISER_test.json
+src/data/raw/*.json
 src/data/processed/*.json
+
+!src/data/raw/TISER_train_demo.json
 !src/data/processed/TISER_train_10pct_demo.json
 
 # Model checkpoints and weights
