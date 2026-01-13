@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Optional, Callable
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-from typing import Optional
 
 
 class LLMWrapper:
     """
-    Wrapper semplice per un modello causale HF + eventuale adapter LoRA.
-
-    Uso tipico:
-        llm = LLMWrapper(
-            model_name="Qwen/Qwen2.5-1.5B-Instruct",
-            lora_path=None,  # oppure "checkpoints/en_actor_lora"
-        )
-        output = llm.generate("My prompt...", max_new_tokens=256)
+    Wrapper semplice per un modello HF causal LM, con supporto:
+    - modelli chat/instruct via tokenizer.chat_template (apply_chat_template)
+    - LoRA opzionale (PEFT) se lora_path è fornito
+    - device selection: cuda > mps > cpu
     """
 
     def __init__(
@@ -40,7 +36,9 @@ class LLMWrapper:
                 device = "cpu"
         self.device = device
 
-        # === Selezione dtype in base al device ===
+        # === Selezione dtype ===
+        # Nota: su MPS float16 può essere ok, ma bf16 spesso è più stabile dove supportato.
+        # Restiamo conservativi: fp16 su cuda/mps, fp32 su cpu.
         if dtype is None:
             if self.device in ("cuda", "mps"):
                 dtype = torch.float16
@@ -50,23 +48,83 @@ class LLMWrapper:
 
         # === Tokenizer ===
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+        # pad_token: necessario per generation
         if self.tokenizer.pad_token is None:
+            # per molti causal LM si usa eos come pad
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # === Modello base ===
-        base_model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            dtype=self.dtype,   # usiamo `dtype` al posto di `torch_dtype`
-        )
+        # device_map="auto" SOLO su CUDA (su MPS può fare mapping strani)
+        model_kwargs = {}
+        if self.device == "cuda":
+            model_kwargs["device_map"] = "auto"
+
+        try:
+            # transformers “nuovi” (come il tuo) preferiscono dtype=
+            base_model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                dtype=self.dtype,
+                **({k: v for k, v in model_kwargs.items() if k != "torch_dtype"}),
+            )
+        except TypeError:
+            # fallback per transformers “vecchi”
+            base_model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=self.dtype,
+                **model_kwargs,
+            )
+
+        # Se NON CUDA, spostiamo esplicitamente sul device
+        # (con CUDA+device_map auto spesso è già sharded)
+        if self.device != "cuda":
+            base_model.to(self.device)
 
         # === Adapter LoRA opzionale ===
         if self.lora_path is not None:
+            # Import lazy: baseline non richiede peft installato
+            from peft import PeftModel
+
             self.model = PeftModel.from_pretrained(base_model, self.lora_path)
         else:
             self.model = base_model
 
-        self.model.to(self.device)
         self.model.eval()
+
+    def _build_inputs(self, prompt: str) -> tuple[torch.Tensor, int]:
+        """
+        Costruisce input_ids e ritorna anche input_len (per tagliare l'output generato).
+
+        Se esiste una chat_template nel tokenizer, usa apply_chat_template con
+        add_generation_prompt=True (fondamentale per molti Instruct model).
+        Altrimenti fallback: tokenizzazione diretta del prompt.
+        """
+        # Chat-template path (Qwen Instruct, Mistral Instruct, ecc.)
+        has_chat_template = (
+            hasattr(self.tokenizer, "chat_template")
+            and self.tokenizer.chat_template is not None
+            and str(self.tokenizer.chat_template).strip() != ""
+        )
+
+        if has_chat_template:
+            messages = [{"role": "user", "content": prompt}]
+            input_ids = self.tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_tensors="pt",
+            )
+        else:
+            enc = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                add_special_tokens=True,
+            )
+            input_ids = enc["input_ids"]
+
+        input_ids = input_ids.to(self.device)
+        input_len = input_ids.shape[-1]
+        return input_ids, input_len
 
     @torch.inference_mode()
     def generate(
@@ -79,53 +137,48 @@ class LLMWrapper:
     ) -> str:
         """
         Genera testo a partire da un prompt.
+        Ritorna SOLO il testo generato (continuation), non include il prompt.
 
-        Restituisce l'intero testo generato (prompt incluso).
-        Il parsing di <answer> lo facciamo a livello di pipeline TISER.
+        Nota: il parsing di <answer> lo fate a livello di pipeline TISER.
         """
         if do_sample is None:
             do_sample = temperature > 0.0
 
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            add_special_tokens=True,
-        ).to(self.device)
+        input_ids, input_len = self._build_inputs(prompt)
 
         generated_ids = self.model.generate(
-            **inputs,
+            input_ids=input_ids,
             max_new_tokens=max_new_tokens,
             do_sample=do_sample,
             temperature=temperature,
             top_p=top_p,
             pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
         )
 
-        full_text = self.tokenizer.decode(
-            generated_ids[0],
-            skip_special_tokens=True,
-        )
+        # Taglia via il prompt: teniamo solo la continuation
+        gen_only = generated_ids[0, input_len:]
+        text = self.tokenizer.decode(gen_only, skip_special_tokens=True)
 
-        return full_text
+        return text.strip()
 
     @torch.inference_mode()
     def generate_answer_only(
         self,
         prompt: str,
-        extractor_fn,
+        extractor_fn: Callable[[str], str],
         max_new_tokens: int = 256,
         temperature: float = 0.2,
         top_p: float = 0.9,
     ) -> str:
         """
-        Variante comoda: genera output completo e poi applica una funzione
+        Variante comoda: genera output e poi applica una funzione
         che estrae la parte desiderata (es. il contenuto di <answer>).
         """
-        full_text = self.generate(
+        text = self.generate(
             prompt=prompt,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
         )
-        answer = extractor_fn(full_text)
-        return answer
+        return extractor_fn(text)

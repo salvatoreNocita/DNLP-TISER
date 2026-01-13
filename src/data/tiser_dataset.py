@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Iterable, Any
 
@@ -63,6 +63,8 @@ class TiserExample:
             logger.warning(f"TiserExample created with empty dataset_name (qid: {self.question_id})")
         if not self.question:
             logger.warning(f"TiserExample created with empty question (qid: {self.question_id})")
+        if not self.prompt:
+            logger.warning(f"TiserExample created with empty prompt (qid: {self.question_id})")
     
     def is_training_example(self) -> bool:
         """
@@ -167,7 +169,8 @@ class TiserFileLoader:
             TiserFileLoader._log_dataset_distribution(examples)
         
         return examples
-    
+
+
     @staticmethod
     def _load_jsonl(
         path: Path,
@@ -175,45 +178,65 @@ class TiserFileLoader:
         verbose: bool
     ) -> List[Dict[str, Any]]:
         """
-        Load and parse JSONL file line by line.
-        
-        Args:
-            path: Path to the JSONL file
-            skip_invalid: Whether to skip invalid lines
-            verbose: Whether to log warnings
-            
-        Returns:
-            List of parsed JSON objects
+        Load JSONL (one JSON object per line) OR a JSON list (single JSON array).
+        Auto-detects by looking at the first non-whitespace character.
         """
-        data = []
+        # Peek first non-whitespace char
+        with path.open("r", encoding="utf-8") as f:
+            start = f.read(4096)
+
+        first_non_ws = None
+        for ch in start:
+            if not ch.isspace():
+                first_non_ws = ch
+                break
+
+        # Case A: JSON list
+        if first_non_ws == "[":
+            try:
+                obj = json.loads(start + path.open("r", encoding="utf-8").read()[4096:])
+            except Exception:
+                # fallback: simpler, just json.load
+                with path.open("r", encoding="utf-8") as f:
+                    obj = json.load(f)
+
+            if not isinstance(obj, list):
+                raise ValueError(f"{path} looks like JSON list but is not a list at top-level.")
+            # ensure dicts
+            out = []
+            for i, item in enumerate(obj):
+                if isinstance(item, dict):
+                    out.append(item)
+                elif not skip_invalid:
+                    raise ValueError(f"Invalid item at index {i} in JSON list: expected dict, got {type(item)}")
+            if verbose:
+                logger.info(f"Loaded {len(out)} examples from JSON list file: {path.name}")
+            return out
+
+        # Case B: JSONL (current behavior)
+        data: List[Dict[str, Any]] = []
         invalid_count = 0
-        
+
         with path.open('r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
-                
                 if not line:
                     continue
-                
                 try:
                     data.append(json.loads(line))
                 except json.JSONDecodeError as e:
                     invalid_count += 1
                     if skip_invalid:
                         if verbose:
-                            logger.warning(
-                                f"Skipping invalid line {line_num} in {path.name}: {e}"
-                            )
+                            logger.warning(f"Skipping invalid line {line_num} in {path.name}: {e}")
                     else:
-                        raise ValueError(
-                            f"Invalid JSON on line {line_num} in {path}: {e}"
-                        ) from e
-        
+                        raise ValueError(f"Invalid JSON on line {line_num} in {path}: {e}") from e
+
         if invalid_count > 0 and verbose:
             logger.warning(f"Skipped {invalid_count} invalid lines in {path.name}")
-        
+
         return data
-    
+
     @staticmethod
     def _convert_to_examples(
         raw_data: List[Dict[str, Any]],
@@ -400,6 +423,18 @@ class TiserDataset(Dataset):
             tokenize=False,
             add_generation_prompt=False
         )
+
+        # Use this alternative formatting if the tokenizer lacks chat template support
+        # and eliminate the above block.
+        """if hasattr(self.tokenizer, "apply_chat_template"):
+            formatted_text = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False
+            )
+            else:
+                formatted_text = f"{example.prompt}\n{example.output}"
+                """
         
         return {"text": formatted_text}
     

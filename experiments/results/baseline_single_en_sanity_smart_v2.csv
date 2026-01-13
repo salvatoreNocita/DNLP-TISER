@@ -1,0 +1,34 @@
+idx,dataset_name,question_id,question,gold_answer,pred_answer,raw_output
+1,tgqa_split_train,story42_Q1_0,"Given the following five events: (Lucas Prescott was married to Megan Peterson), (Lucas Prescott was born in Northampton, Massachusetts), (Megan Peterson was married to Lucas Prescott), (Megan Peterson died in Millwood Town, Austin), (Megan Peterson was born in Harmonyville, Florida). Which event is the first one in chronological order?","Lucas Prescott was born in Northampton, Massachusetts","The events were ordered correctly from earliest to latest. I checked the start dates of each event and found that none of them started after 1946, which is the year when Lucas Prescott was married to Megan Peterson. Therefore","<reasoning>
+To determine which event is the first chronologically, we need to compare the start dates of each event. We can see that all events except ""Megan Peterson was born in Harmonyville, Florida"" start before 1946, so this cannot be the earliest event. Therefore, we only need to consider the remaining four events.
+</reasoning>
+
+<timeline>
+- Lucas Prescott was born in Northampton, Massachusetts: 1908
+- Megan Peterson was born in Harmonyville, Florida: 1921
+- Megan Peterson was married to Lucas Prescott: 1946
+- Lucas Prescott was married to Megan Peterson: 1946
+- Lucas Prescott died in Oceanview: 1990
+- Megan Peterson was married to Lucas Prescott: 1990
+- Lucas Prescott was married to Megan Peterson: 1990
+- Megan Peterson died in Millwood Town, Austin: 1997
+</timeline>
+
+<reflection>
+The events were ordered correctly from earliest to latest. I checked the start dates of each event and found that none of them started after 1946, which is the year when Lucas Prescott was married to Megan Peterson. Therefore"
+2,tgqa_split_train,story410_Q2_0,How long did the event (Oliver Thompson was married to Charlie Evans) last?,5,5,"<reasoning>
+The event ""Oliver Thompson was married to Charlie Evans"" started in 2000 and ended in 2005. Therefore, it lasted from 2000 to 2005.
+</reasoning>
+
+<timeline>
+- 2000: Oliver Thompson was married to Charlie Evans
+- 2005: Oliver Thompson was no longer married to Charlie Evans
+</timeline>
+
+<reflection>
+I correctly identified the start and end years of the marriage between Oliver Thompson and Charlie Evans, which were 2000 and 2005 respectively. There were no other relevant temporal events provided in the context that would affect this calculation.
+</reflection>
+
+<answer>
+2005 - 2000 = 5 years
+</answer>"

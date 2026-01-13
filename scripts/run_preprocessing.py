@@ -13,28 +13,46 @@ Features:
 
 Examples:
     # Process a single file
-    python scripts/run_preprocessing.py --input src/data/raw/TISER_train.json --output src/data/processed/TISER_train_10pct.json --ratio 0.1
+    python scripts/run_preprocessing.py --input data/raw/TISER_train.json --output data/processed/TISER_train_10pct.json --ratio 0.1
     
     # Process multiple train splits
-    python scripts/run_preprocessing.py --input-dir src/data/raw/ --output-dir src/data/processed/ --ratio 0.1 --seed 42
+    python scripts/run_preprocessing.py --input-dir data/raw/ --output-dir data/processed/ --ratio 0.1 --seed 42
     
     # Create multiple retention ratios
-    python scripts/run_preprocessing.py --input src/data/raw/TISER_train.json --output-prefix src/data/processed/TISER_train --ratios 0.05 0.1 0.25
+    python scripts/run_preprocessing.py --input data/raw/TISER_train.json --output-prefix data/processed/TISER_train --ratios 0.05 0.1 0.25
 """
 
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 import logging
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from src.config import PROJECT_ROOT, RAW_DIR, PROCESSED_DIR
 from src.data.preprocessing import preprocess_tiser_split
 
 logger = logging.getLogger(__name__)
 
+
+def _pct_tag(r: float) -> str:
+    # 0.1 -> "10pct", 0.075 -> "8pct" (round)
+    return f"{round(r * 100)}pct"
+
+def _validate_ratio(r: float):
+    if r <= 0.0 or r > 1.0:
+        raise ValueError(f"--ratio must be in (0, 1], got {r}")
+
+def _resolve_input_path(p: Path) -> Path:
+    # Se è già assoluto o include una directory, lascialo stare (relativo a cwd)
+    if p.is_absolute() or p.parent != Path("."):
+        return p
+    # Se è solo un nome file, assumiamo RAW_DIR
+    return RAW_DIR / p
+
+def _resolve_output_path(p: Path) -> Path:
+    if p.is_absolute() or p.parent != Path("."):
+        return p
+    return PROCESSED_DIR / p
 
 def setup_logging(verbose: bool = True):
     """Configure logging for the script."""
@@ -57,8 +75,8 @@ def process_single_file(
     Process a single TISER dataset file.
     
     Args:
-        input_path: Path to input JSON file
-        output_path: Path to output JSON file
+        input_path: Path to input JSONL file
+        output_path: Path to output JSONL file
         retention_ratio: Fraction of data to retain
         random_seed: Random seed for reproducibility
         verbose: Whether to show detailed logs
@@ -73,6 +91,8 @@ def process_single_file(
     logger.info(f"Retention Ratio: {retention_ratio*100:.1f}%")
     logger.info(f"Random Seed: {random_seed}")
     logger.info(f"{'='*80}\n")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     try:
         original_count, sampled_count = preprocess_tiser_split(
@@ -136,7 +156,7 @@ def process_directory(
     for input_path in input_files:
         # Generate output filename
         stem = input_path.stem
-        suffix = f"_{int(retention_ratio*100)}pct"
+        suffix = f"_{_pct_tag(retention_ratio)}_seed{random_seed}"
         output_path = output_dir / f"{stem}{suffix}.json"
         
         try:
@@ -171,7 +191,7 @@ def process_multiple_ratios(
     Process a single file with multiple retention ratios.
     
     Args:
-        input_path: Path to input JSON file
+        input_path: Path to input JSONL file
         output_prefix: Prefix for output files (without extension)
         retention_ratios: List of retention ratios to apply
         random_seed: Random seed for reproducibility
@@ -189,7 +209,7 @@ def process_multiple_ratios(
     
     results = []
     for ratio in retention_ratios:
-        suffix = f"_{int(ratio*100)}pct"
+        suffix = f"_{_pct_tag(ratio)}"
         output_path = Path(str(output_prefix) + suffix + ".json")
         
         try:
@@ -215,7 +235,7 @@ def process_multiple_ratios(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Preprocess TISER dataset with hierarchical stratified sampling",
+        description="Preprocess TISER dataset with hierarchical stratified sampling. If neither --input nor --input-dir is provided, the script processes all matching files in data/raw (as defined in config.py).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -235,29 +255,34 @@ Examples:
     )
     
     # Input/output modes
-    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group = parser.add_mutually_exclusive_group()
     input_group.add_argument(
         '--input', '-i',
         type=Path,
-        help='Path to input JSON file'
+        help='Path to input JSONL file'
     )
+
     input_group.add_argument(
         '--input-dir', '-d',
         type=Path,
-        help='Directory containing TISER JSON files'
+        default=RAW_DIR,
+        help=f"Directory containing TISER JSONL files (default: {RAW_DIR})"
     )
     
     # Output options
     parser.add_argument(
         '--output', '-o',
         type=Path,
-        help='Path to output JSON file (required with --input)'
+        help='Path to output JSONL file (required with --input)'
     )
+
     parser.add_argument(
         '--output-dir',
         type=Path,
-        help='Output directory (required with --input-dir)'
+        default=PROCESSED_DIR,
+        help=f"Output directory (default: {PROCESSED_DIR})"
     )
+
     parser.add_argument(
         '--output-prefix',
         type=Path,
@@ -298,9 +323,38 @@ Examples:
     )
     
     args = parser.parse_args()
+
+    # Default behavior: process RAW_DIR if nothing is specified
+    if args.input is None and args.input_dir is None:
+        args.input_dir = RAW_DIR
+
+
+    if args.ratio is not None:
+        _validate_ratio(args.ratio)
+    if args.ratios is not None:
+        for r in args.ratios:
+            _validate_ratio(r)
     
     # Setup logging
     setup_logging(verbose=not args.quiet)
+
+    if args.input:
+        args.input = _resolve_input_path(args.input)
+        if args.output:
+            args.output = _resolve_output_path(args.output)
+        if args.output_prefix:
+            # output_prefix è un prefisso, ma stessa logica: se è solo nome, mettilo in processed
+            if args.output_prefix.is_absolute() or args.output_prefix.parent != Path("."):
+                pass
+            else:
+                args.output_prefix = PROCESSED_DIR / args.output_prefix
+
+    if args.input_dir:
+        if not args.input_dir.is_absolute():
+            # se lo passi come "raw" o "data/raw", lo risolviamo rispetto a PROJECT_ROOT
+            args.input_dir = (PROJECT_ROOT / args.input_dir).resolve()
+        if args.output_dir and not args.output_dir.is_absolute():
+            args.output_dir = (PROJECT_ROOT / args.output_dir).resolve()
     
     # Validate arguments based on mode
     if args.input:

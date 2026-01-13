@@ -15,8 +15,35 @@ from src.config import (
 )
 from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
-from src.tiser.parsing import extract_answer
 from src.tiser.metrics import compute_em_f1
+from src.tiser.parsing import extract_answer
+
+
+def generate_until_answer(
+    llm,
+    prompt: str,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    max_retries: int = 2,
+    growth: float = 2.0,
+    hard_cap: int = 2048,
+) -> str:
+    """
+    Genera output e, se manca </answer>, ritenta aumentando max_new_tokens.
+    Se fallisce comunque, restituisce l'ultimo output (che sarà incompleto).
+    """
+    cur = max_new_tokens
+    out = llm.generate(prompt=prompt, max_new_tokens=cur, temperature=temperature, top_p=top_p)
+
+    for r in range(max_retries):
+        if "</answer>" in out.lower():
+            return out
+        cur = min(int(cur * growth), hard_cap)
+        print(f"[WARN] Missing </answer>. Retrying with max_new_tokens={cur} (retry {r+1}/{max_retries})")
+        out = llm.generate(prompt=prompt, max_new_tokens=cur, temperature=temperature, top_p=top_p)
+
+    return out
 
 
 def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
@@ -54,8 +81,8 @@ def main():
     parser.add_argument(
         "--test-file",
         type=str,
-        default=str(PROCESSED_DIR / "tiser_test_subset_en.json"),
-        help="Path al file JSON di test (subset EN).",
+        required=True,
+        help="Path to the JSON/JSONL test file.",
     )
     parser.add_argument(
         "--max-examples",
@@ -70,7 +97,16 @@ def main():
         help="Tag per il nome del file di risultato (es. 'base' o 'ft').",
     )
 
+    # Retry policy knobs
+    parser.add_argument("--max-retries", type=int, default=2)
+    parser.add_argument("--growth", type=float, default=2.0)
+    parser.add_argument("--hard-cap", type=int, default=2048)
+
     args = parser.parse_args()
+
+    test_path = Path(args.test_file)
+    if not test_path.exists():
+        raise FileNotFoundError(f"Test file not found: {test_path}")
 
     test_path = Path(args.test_file)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -91,14 +127,23 @@ def main():
 
         print(f"[{i}/{len(examples)}] question_id={ex.question_id}")
 
-        output = llm.generate(
+        output = generate_until_answer(
+            llm=llm,
             prompt=prompt,
             max_new_tokens=GEN_MAX_NEW_TOKENS,
             temperature=GEN_TEMPERATURE,
             top_p=GEN_TOP_P,
+            max_retries=args.max_retries,
+            growth=args.growth,
+            hard_cap=args.hard_cap,
         )
 
-        pred_answer = extract_answer(output)
+        if "</answer>" not in output.lower():
+            print(f"[WARN] Still missing </answer> after retries. Marking prediction as empty. qid={ex.question_id}")
+            pred_answer = ""   # fail-closed
+        else:
+            pred_answer = extract_answer(output)
+        # pred_answer = extract_answer(output) # simpler extraction without smart post-processing
 
         preds_gold.append((pred_answer, gold))
 
@@ -111,6 +156,7 @@ def main():
                 "gold_answer": gold,
                 "pred_answer": pred_answer,
                 "raw_output": output,
+                "has_answer_tag": ("</answer>" in output.lower()),
             }
         )
 
@@ -135,6 +181,7 @@ def main():
                 "gold_answer",
                 "pred_answer",
                 "raw_output",
+                "has_answer_tag"
             ],
         )
         writer.writeheader()

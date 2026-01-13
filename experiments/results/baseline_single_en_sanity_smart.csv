@@ -1,0 +1,40 @@
+idx,dataset_name,question_id,question,gold_answer,pred_answer,raw_output
+1,tgqa_split_train,story42_Q1_0,"Given the following five events: (Lucas Prescott was married to Megan Peterson), (Lucas Prescott was born in Northampton, Massachusetts), (Megan Peterson was married to Lucas Prescott), (Megan Peterson died in Millwood Town, Austin), (Megan Peterson was born in Harmonyville, Florida). Which event is the first one in chronological order?","Lucas Prescott was born in Northampton, Massachusetts",- Lucas Prescott was married,"<reasoning>
+To determine which event is the first one in chronological order, we need to compare the start dates of each event relative to the earliest known starting date, which is Lucas Prescott's birth in Northampton, Massachusetts (1908).
+
+- Lucas Prescott was born in Northampton, Massachusetts (1908)
+- Megan Peterson was born in Harmonyville, Florida (1921)
+- Megan Peterson was married to Lucas Prescott (1946)
+- Lucas Prescott was married to Megan Peterson (1946)
+- Lucas Prescott died in Oceanview (1990)
+- Megan Peterson was married to Lucas Prescott (1990)
+- Lucas Prescott was married to Megan Peterson (1990)
+- Megan Peterson died in Millwood Town, Austin (1997)
+
+The earliest known starting date is Lucas Prescott's birth in 1908. Therefore, all other events should precede this one chronologically.
+</reasoning>
+
+<timeline>
+- Lucas Prescott was born in Northampton, Massachusetts (1908)
+- Megan Peterson was born in Harmonyville, Florida (1921)
+- Megan Peterson was married to Lucas Prescott (1946)
+- Lucas Prescott was married"
+2,tgqa_split_train,story410_Q2_0,How long did the event (Oliver Thompson was married to Charlie Evans) last?,5,2005,"<reasoning>
+The event ""Oliver Thompson was married to Charlie Evans"" lasted from 2000 to 2005.
+</reasoning>
+<timeline>
+- Charlie Evans was born in Riverside, California (1963)
+- Oliver Thompson was born in Springfield, Chicago (1969)
+- Connor Anderson was born in Bristol, Connecticut (1971)
+- Oliver Thompson was married to Charlie Evans (2000)
+- Charlie Evans was married to Oliver Thompson (2000)
+- Oliver Thompson was married to Charlie Evans (2000 - 2005)
+- Charlie Evans was married to Oliver Thompson (2000 - 2005)
+- Oliver Thompson was married to Connor Anderson (2015)
+</timeline>
+<reflection>
+I correctly identified the start year of the marriage between Oliver Thompson and Charlie Evans as 2000 and ended it at 2005. There were no other marriages involving Oliver Thompson mentioned in the provided information, so I can conclude that this was the only marriage he had during the specified time period.
+</reflection>
+<answer>
+2005
+</answer>"

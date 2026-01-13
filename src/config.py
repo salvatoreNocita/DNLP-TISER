@@ -21,6 +21,9 @@ CHECKPOINTS_EN_ACTOR = CHECKPOINTS_DIR / "en_actor_lora"
 CHECKPOINTS_IT_ACTOR = CHECKPOINTS_DIR / "it_actor_lora"
 CHECKPOINTS_CRITIC = CHECKPOINTS_DIR / "critic"
 
+# Directory per i checkpoint durante l'addestramento
+CHECKPOINTS_TRAINING_LORA = CHECKPOINTS_DIR / "training_lora"
+
 
 # === Modelli ===
 # Idea:
@@ -29,9 +32,14 @@ CHECKPOINTS_CRITIC = CHECKPOINTS_DIR / "critic"
 
 # Modello piccolo per sviluppo (puoi cambiarlo con quello che riesci a far girare):
 DEV_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+# Alternative:
+#   - da 3.8B parameters microsoft/Phi-3-mini-4k-instruct
+#   - da 3B parameters: Qwen/Qwen-3B-Instruct
+#   - da 3B parameters:meta-llama/Llama-3.2-3B-Instruct
 
 # Modello “serio” per esperimenti EN su GPU (Colab)
 TRAIN_MODEL_NAME_EN = "Qwen/Qwen2.5-7B-Instruct"
+# Alternativa: da 7B parameters mistralai/Mistral-7B-v0.1
 
 # Per semplicità, usiamo lo stesso modello anche per IT (multilingual)
 TRAIN_MODEL_NAME_IT = TRAIN_MODEL_NAME_EN
@@ -42,7 +50,7 @@ CRITIC_MODEL_NAME_EN = TRAIN_MODEL_NAME_EN
 
 # === Default generazione ===
 
-GEN_MAX_NEW_TOKENS = 256
+GEN_MAX_NEW_TOKENS = 256  # set to 32 for faster testing & sanity checks
 GEN_TEMPERATURE = 0.2
 GEN_TOP_P = 0.9
 

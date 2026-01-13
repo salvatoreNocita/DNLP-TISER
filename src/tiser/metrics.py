@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Tuple, Any
 from collections import Counter
 
 
-def _normalize_text(s: str) -> str:
+def _normalize_text(s: Any) -> str:
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
     return " ".join(s.strip().lower().split())
 
 

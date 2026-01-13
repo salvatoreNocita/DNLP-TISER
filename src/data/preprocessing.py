@@ -151,7 +151,7 @@ class HierarchicalSampler:
     Implements hierarchical stratified sampling with probabilistic diversity preservation.
     
     The sampler operates in two levels:
-    1. Dataset level: Maintains the ratio of samples per dataset_name
+    1. Dataset level: Approximately preserves dataset-level distribution via per-context sampling; exact quotas are not enforced
     2. Context level: Within each dataset, samples from diverse contexts
     """
     
@@ -183,48 +183,47 @@ class HierarchicalSampler:
         
         # Iterate through each dataset
         for dataset_name, contexts in hierarchical_data.items():
-            dataset_samples = self._sample_dataset(dataset_name, contexts)
+            dataset_samples, n_contexts_kept = self._sample_dataset(dataset_name, contexts)
             sampled_data.extend(dataset_samples)
             
             original_count = sum(len(samples) for samples in contexts.values())
             total_original += original_count
-            
-            logger.info(
-                f"Dataset '{dataset_name}': "
-                f"{len(dataset_samples)}/{original_count} samples "
-                f"({len(dataset_samples)/original_count*100:.1f}%) "
-                f"from {len([s for s in dataset_samples if s])} contexts"
-            )
+
+            if original_count == 0:
+                logger.info(f"Dataset '{dataset_name}': 0/0 samples (0.0%) from 0 contexts")
+            else:            
+                logger.info(
+                    f"Dataset '{dataset_name}': "
+                    f"{len(dataset_samples)}/{original_count} samples "
+                    f"({len(dataset_samples)/original_count*100:.1f}%) "
+                    f"from {n_contexts_kept} contexts"
+                )
         
-        logger.info(
-            f"Total: {len(sampled_data)}/{total_original} samples "
+        if total_original == 0:
+            logger.info("Total: 0/0 samples (0.0%)")
+        else:
+            logger.info(
+                f"Total: {len(sampled_data)}/{total_original} samples "
             f"({len(sampled_data)/total_original*100:.1f}%)"
         )
         
         return sampled_data
     
     def _sample_dataset(
-        self, 
-        dataset_name: str, 
+        self,
+        dataset_name: str,
         contexts: Dict[str, List[Dict]]
-    ) -> List[Dict]:
-        """
-        Sample from a single dataset across all its contexts.
-        
-        Args:
-            dataset_name: Name of the dataset
-            contexts: Dict mapping context_key to list of samples
-        
-        Returns:
-            List of sampled data points from this dataset
-        """
-        sampled = []
-        
+    ) -> Tuple[List[Dict], int]:
+        sampled: List[Dict] = []
+        contexts_kept = 0
+
         for context_key, samples in contexts.items():
             context_samples = self._sample_context(context_key, samples)
-            sampled.extend(context_samples)
-        
-        return sampled
+            if context_samples:
+                contexts_kept += 1
+                sampled.extend(context_samples)
+
+        return sampled, contexts_kept
     
     def _sample_context(self, context_key: str, samples: List[Dict]) -> List[Dict]:
         """
@@ -286,9 +285,11 @@ class TISERPreprocessor:
         
         # Configure logging
         if verbose:
-            logging.basicConfig(
-                level=logging.INFO,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            root = logging.getLogger()
+            if not root.handlers:
+                logging.basicConfig(
+                    level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
     
     def load_data(self, input_path: Path) -> List[Dict]:
