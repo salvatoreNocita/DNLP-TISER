@@ -47,6 +47,7 @@ from transformers import (
     AutoModelForCausalLM,
     TrainingArguments
 )
+from datasets import Dataset as HFDataset
 from peft import LoraConfig
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 
@@ -149,7 +150,10 @@ def load_dataset(data_path: Path, tokenizer, max_examples: Optional[int] = None)
 
 def setup_data_collator(tokenizer, response_template: str = "<|im_start|>assistant\n"):
     """
-    Create data collator for completion-only training.
+    Create data collator for completion-only training. The collator is responsible for:
+    Padding sequences: Different text sequences might have different lengths. The data colltor pads these sequences to the same length so that they can be processed in parallel in a batch
+    Creating Attention Masks: When padding sequences, the data collator also creates attention masks to inform the model which tokens are real and which are just padding.
+    Handling Special Tokens: Some models require special tokens (like start and end tokens) in the input. The data collator can add these as needed.
     
     Args:
         tokenizer: Tokenizer to use
@@ -158,6 +162,16 @@ def setup_data_collator(tokenizer, response_template: str = "<|im_start|>assista
     Returns:
         DataCollatorForCompletionOnlyLM
     """
+    #We use this collator because forces the model to try to learn only the response, not the question. The colletor
+    #is indeed responsible to associate -inf labels to the corresponding pad token inserted, but DataCollatorForCompletionOnlyLM
+    #is used to force the model to learn only how to minimize the loss on the response, avoiding useless mnemonic work
+    #to learn the question. For example:
+    #A classic collator would do the following:
+    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
+    #labels: [User] [Prompt] [Assist] [Resp] [-100]
+    #DataCollatorForCompletionOnlyLM would do this instead:
+    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
+    #labels: [-100] [-100] [-100] [Resp] [-100]
     collator = DataCollatorForCompletionOnlyLM(
         response_template=response_template,
         tokenizer=tokenizer
@@ -358,6 +372,7 @@ def train_model(
     
     # Load dataset
     train_dataset = load_dataset(data_path, tokenizer, max_examples)
+    hf_train_dataset = HFDataset.from_list([item for item in train_dataset])
     
     # Setup data collator
     data_collator = setup_data_collator(tokenizer, response_template)
@@ -382,7 +397,7 @@ def train_model(
     logger.info("Initializing SFTTrainer...")
     trainer = SFTTrainer(
         model=model,
-        train_dataset=train_dataset,
+        train_dataset=hf_train_dataset,
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         data_collator=data_collator,
