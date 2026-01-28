@@ -198,17 +198,9 @@ def load_model(model_id: str, device: str, use_flash_attention: bool = False):
     
     # Configure model loading parameters
     model_kwargs = {
-        "device_map": "auto",
-        "torch_dtype": torch.bfloat16,  # bfloat16 works well on M1/M2/M3 and modern GPUs
+        #"device_map": "auto", #non usiamo auto, dobbiamo parallelizzare a mano
+        "torch_dtype": torch.float16,
     }
-    
-    # Flash Attention 2 only works on CUDA
-    if device == "cuda" and use_flash_attention:
-        try:
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-            logger.info("Using Flash Attention 2 for faster training")
-        except Exception as e:
-            logger.warning(f"Flash Attention 2 not available: {e}")
     
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
@@ -291,6 +283,31 @@ def create_training_args(
     """
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Configurazione DeepSpeed ZeRO-2 (Offload Optimizer)
+    # Questo permette di tenere il modello in VRAM ma scarica stati dell'ottimizzatore
+    # se necessario, permettendo al 7B di entrare in memoria senza quantizzazione.
+    ds_config = {
+        "fp16": {
+            "enabled": True,
+        },
+        "zero_optimization": {
+            "stage": 2,
+            "offload_optimizer": {
+                "device": "cpu",
+                "pin_memory": True
+            },
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 2e8,
+            "contiguous_gradients": True
+        },
+        "gradient_accumulation_steps": "auto",
+        "train_batch_size": "auto",
+        "train_micro_batch_size_per_gpu": "auto"
+    }
     
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -300,8 +317,9 @@ def create_training_args(
         learning_rate=learning_rate,
         logging_steps=logging_steps,
         save_strategy=save_strategy,
-        fp16=False,  # Disable fp16 (not compatible with MPS)
-        bf16=True,   # Use bfloat16 (works on Apple Silicon and modern GPUs)
+        fp16=True,  # use fp16
+        bf16=False,   # disable bf16 (not compatible with T4 gpu)
+        deepspeed=ds_config,
         max_grad_norm=max_grad_norm,
         warmup_ratio=warmup_ratio,
         lr_scheduler_type="cosine",
@@ -309,6 +327,7 @@ def create_training_args(
         report_to="none",     # Disable WandB/Tensorboard by default
         remove_unused_columns=True,
         logging_first_step=True,
+        ddp_find_unused_parameters=False,  # Importante per LoRA
     )
     
     effective_batch_size = batch_size * gradient_accumulation_steps
