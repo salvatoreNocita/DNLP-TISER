@@ -49,8 +49,7 @@ from transformers import (
 )
 from datasets import Dataset as HFDataset
 from peft import LoraConfig
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
-
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM, SFTConfig
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -218,7 +217,7 @@ def load_model(model_id: str, device: str, use_flash_attention: bool = False):
     # Enable gradient checkpointing to save memory (essential for 7B+ models)
     model.gradient_checkpointing_enable()
     logger.info("Gradient checkpointing enabled")
-    
+    model.config.use_cache = False
     return model
 
 
@@ -292,8 +291,10 @@ def create_training_args(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=str(output_dir),
+        dataset_text_field="text",
+        max_seq_length=max_seq_length,
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -398,12 +399,10 @@ def train_model(
     trainer = SFTTrainer(
         model=model,
         train_dataset=hf_train_dataset,
-        dataset_text_field="text",
-        max_seq_length=max_seq_length,
-        data_collator=data_collator,
-        tokenizer=tokenizer,
-        peft_config=peft_config,
         args=training_args,
+        data_collator=data_collator,
+        processing_class=tokenizer,
+        peft_config=peft_config,
         packing=False
     )
     
