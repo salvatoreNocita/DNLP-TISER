@@ -402,7 +402,7 @@ def train_model(
         train_dataset=hf_train_dataset,
         args=training_args,
         data_collator=data_collator,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         peft_config=peft_config,
         packing=False
     )
