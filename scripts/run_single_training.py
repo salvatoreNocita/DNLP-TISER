@@ -268,8 +268,9 @@ def create_training_args(
     warmup_ratio: float = 0.03,
     logging_steps: int = 5,
     save_strategy: str = "epoch",
-    device: str = "cuda"
-) -> TrainingArguments:
+    device: str = "cuda",
+    max_seq_length: int = 2048
+) -> SFTConfig:
     """
     Create training arguments configuration.
     
