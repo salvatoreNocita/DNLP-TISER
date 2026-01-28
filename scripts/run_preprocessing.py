@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import List
 import logging
 
+sys.path.append(".")
 from src.config import PROJECT_ROOT, RAW_DIR, PROCESSED_DIR
 from src.data.preprocessing import preprocess_tiser_split
 
