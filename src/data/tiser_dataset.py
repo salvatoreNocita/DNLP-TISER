@@ -49,6 +49,7 @@ class TiserExample:
     dataset_name: str
     question_id: str
     question: str
+    context: str
     answer: str
     prompt: str
     output: Optional[str] = None
@@ -86,6 +87,7 @@ class TiserExample:
             'dataset_name': self.dataset_name,
             'question_id': self.question_id,
             'question': self.question,
+            'context': self.context,
             'answer': self.answer,
             'prompt': self.prompt,
         }
@@ -291,10 +293,26 @@ class TiserFileLoader:
         Returns:
             TiserExample object
         """
+        prompt = raw.get('prompt', '')
+        context_text = raw.get('context', '') # First, check if it exists explicitly
+        
+        # --- LOGIC EXTRACTION CONTEXT ---
+        if not context_text and prompt:
+            # Marker identified in the prompt structure
+            marker = "Temporal context:"
+            if marker in prompt:
+                # Extract everything after the marker
+                try:
+                    context_text = prompt.split(marker)[-1].strip()
+                except Exception:
+                    # In case of splitting errors (rare), leave empty
+                    pass
+
         return TiserExample(
             dataset_name=raw.get('dataset_name', ''),
             question_id=str(raw.get('question_id', '')),
             question=raw.get('question', ''),
+            context=context_text,
             answer=raw.get('answer', ''),
             prompt=raw.get('prompt', ''),
             output=raw.get('output'),  # May be None for test data
@@ -453,6 +471,7 @@ class TiserDataset(Dataset):
             'dataset_name': example.dataset_name,
             'question_id': example.question_id,
             'question': example.question,
+            'context': example.context,
             'answer': example.answer,
         }
 

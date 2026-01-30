@@ -310,13 +310,37 @@ class TISERPreprocessor:
                 line = line.strip()
                 if line:  # Skip empty lines
                     try:
-                        data.append(json.loads(line))
+                        sample = json.loads(line)
+
+                        if 'context' not in sample:
+                            sample = self._enrich_with_context(sample)
+
+                        data.append(sample)
                     except json.JSONDecodeError as e:
                         logger.error(f"Error parsing line {line_num}: {e}")
                         raise
         
         logger.info(f"Loaded {len(data)} samples")
         return data
+    
+    def _enrich_with_context(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extracts temporal context from the prompt string and adds it as a field.
+        """
+        prompt = sample.get('prompt', '')
+        # Robust extraction logic matching what we used in tiser_dataset.py
+        marker = "Temporal context:"
+        
+        if marker in prompt:
+            try:
+                # Extract everything after the marker
+                context_text = prompt.split(marker)[-1].strip()
+                if context_text:
+                    sample['context'] = context_text
+            except Exception:
+                pass
+        
+        return sample
     
     def group_hierarchically(self, data: List[Dict]) -> Dict[str, Dict[str, List[Dict]]]:
         """

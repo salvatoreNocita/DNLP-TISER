@@ -1,0 +1,30 @@
+idx,variant,dataset_name,question_id,question,gold_answer,pred_answer,raw_output,has_answer_tag
+1,only_reasoning,tgqa_split_train,story410_Q2_0,How long did the event (Oliver Thompson was married to Charlie Evans) last?,5,5 years,"<reasoning>
+To determine how long the event ""Oliver Thompson was married to Charlie Evans"" lasted, we need to consider the start and end dates of this marriage.
+- Start date: 2000
+- End date: 2005
+
+The duration can be calculated as follows:
+Duration = End date - Start date
+Duration = 2005 - 2000
+Duration = 5 years
+
+Therefore, the event lasted for 5 years.
+</reasoning>
+<answer>
+5 years
+</answer>",True
+2,only_reasoning,tgqa_split_train,story471_Q1_0,"Given the following five events: (Samuel Williams (football) played for Miami Thunder Soccer Team), (Samuel Williams (football) played for FC Oakville), (Samuel Williams (football) played for Whitefield United F.C.), (Samuel Williams (football) played for Wilmington Tigers soccer club), (Samuel Williams (football) played for London Rangers). Which event is the fourth one in chronological order?",Samuel Williams (football) played for FC Oakville,Wilmington Tigers soccer club,"To determine which event is the fourth one in chronological order, we need to arrange the given events chronologically based on their start and end dates:
+
+1. Samuel Williams (football) played for Glenville (birth): 1987
+2. Samuel Williams (football) played for Whitefield United F.C.: 2003 - 2004
+3. Samuel Williams (football) played for Miami Thunder Soccer Team: 2005
+4. Samuel Williams (football) played for Wilmington Tigers soccer club: 2005 - 2007
+5. Samuel Williams (football) played for Evergreen City Sharks: 2008
+
+The fourth event in chronological order is ""Samuel Williams (football) played for Wilmington Tigers soccer club"" from 2005 to 2007.
+
+Therefore, the final answer is:
+<answer>
+Wilmington Tigers soccer club
+</answer>",True

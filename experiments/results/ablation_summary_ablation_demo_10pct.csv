@@ -1,0 +1,2 @@
+tag,variant,overall_em,overall_f1,macro_avg_em,em__tgqa_split_train
+ablation_demo_10pct,only_reasoning,0.0,0.3333333333333333,0.0,0.0
