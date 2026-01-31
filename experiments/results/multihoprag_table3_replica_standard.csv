@@ -1,0 +1,2 @@
+idx,lora,prompt_mode,question_type,question_id,question,gold_answer,pred_answer,raw_output,has_answer_tag
+1,,standard,inference,5390ae18477c53f9,"Who is the individual associated with the cryptocurrency industry facing a criminal trial on fraud and conspiracy charges, as reported by both The Verge and TechCrunch, and is accused by prosecutors of committing fraud for personal gain?",Sam Bankman-Fried,Mark Cuban,<answer> Mark Cuban </answer>,True

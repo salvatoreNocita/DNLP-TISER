@@ -1,0 +1,5 @@
+tag,lora,prompt_mode,group,n,em,f1
+table3_replica,,standard,overall,1,0.0,0.0
+table3_replica,,standard,inference,1,0.0,0.0
+table3_replica,,tiser,overall,1,1.0,1.0
+table3_replica,,tiser,inference,1,1.0,1.0

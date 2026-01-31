@@ -48,7 +48,6 @@ from src.tiser.prompts import (
     ABLATION_NO_TIMELINE_PROMPT_TEMPLATE,            # ablation: no timeline construction
     ABLATION_NO_REASONING_PROMPT_TEMPLATE,           # ablation: no reasoning
     TISER_PROMPT_TEMPLATE,             # full TISER prompt
-    ACTOR_FINETUNED_TEMPLATE,      # optional: if LoRA you may prefer minimal
 )
 
 # Map: variant_name -> template_variable
@@ -61,6 +60,9 @@ VARIANT_PROMPTS: Dict[str, str] = {
     "no_reasoning": ABLATION_NO_REASONING_PROMPT_TEMPLATE,
     "all_stages": TISER_PROMPT_TEMPLATE,
 }
+
+def flatten_text(text: str) -> str:
+    return text.replace("\n", " ").replace("\r", " ")
 
 
 # ======================================================================
@@ -187,6 +189,7 @@ def main():
             )
 
             pred_answer = extract_answer(raw)
+            has_answer_tag = False if pred_answer == "" else True
             gold = ex.answer
 
             preds_gold_all.append((pred_answer, gold))
@@ -199,8 +202,8 @@ def main():
                 "question": question,
                 "gold_answer": gold,
                 "pred_answer": pred_answer,
-                "raw_output": raw,
-                "has_answer_tag": "<answer>" in raw.lower(),
+                "raw_output": flatten_text(raw),
+                "has_answer_tag": has_answer_tag,
             })
 
         em_all, f1_all = compute_em_f1(preds_gold_all)
