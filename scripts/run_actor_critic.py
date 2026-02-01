@@ -1,30 +1,14 @@
 """
 CLI Script for TISER Actor-Critic Inference Pipeline
+MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output)
 
-This script executes the multi-stage reasoning pipeline (Actor -> Critic -> Solver)
-for the TISER dataset, supporting both base models and fine-tuned LoRA adapters.
-
-Key Features:
-- Multi-Stage Inference: Implements the full Actor (Reasoning), Critic (Reflection),
-  and Solver (Adjustment) loop.
-- Dynamic Prompting: Automatically switches between instruction-heavy prompts for
-  base models and minimal inputs for fine-tuned (LoRA) models.
-- Robust Generation: Handles XML tag validation and retries for malformed outputs.
-- Comprehensive Logging: Exports detailed CSV results including raw outputs from
-  all stages for error analysis.
+- Supports Actor -> Critic -> Solver loop
+- Flattened raw outputs for consistent CSV logging
+- Vertical summary format (Row per Dataset, plus __OVERALL__)
 
 Examples:
-    # Run standard inference with a base model (Zero-Shot/Few-Shot)
     python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --tag base_run
-    
-    # Run inference with a Fine-Tuned LoRA adapter (activates minimal prompts)
     python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
-    
-    # Quick debug run on first 5 examples
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --max-examples 5 --tag debug_quick
-    
-    # Run with higher temperature for creative critique and increased robustness
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --temp 0.7 --max-retries 5
 """
 
 import sys
@@ -35,10 +19,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import argparse
 import csv
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List, Any
 from collections import defaultdict
-from typing import List
-
 
 from src.config import (
     PROCESSED_DIR,
@@ -58,28 +40,56 @@ from src.tiser.prompts import (
     FINAL_SOLVER_PROMPT_TEMPLATE
 )
 
-def compute_metrics_by_dataset(rows: List[Dict[str, str]]) -> Tuple[Dict[str, Dict[str, float]], float]:
+# ==============================================================================
+# UTILITIES
+# ==============================================================================
+
+def flatten_text(text: str) -> str:
+    """Flatten newlines for single-line CSV logging."""
+    if not text: return ""
+    return text.replace("\n", " ").replace("\r", " ")
+
+def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    rows must contain: dataset_name, pred_answer, gold_answer
-    Returns:
-      - per_dataset: {dataset_name: {"em": em, "f1": f1, "n": n}}
-      - macro_avg_em: mean of per-dataset EM (unweighted)
+    Computes EM and F1 for each dataset AND an overall aggregate.
+    Returns a list of dictionaries ready for the summary CSV.
+    Matches the format of the ablation script.
     """
-    grouped = defaultdict(list)  # dataset_name -> list[(pred, gold)]
+    # 1. Group by dataset
+    grouped = defaultdict(list)
+    all_pairs = []
+    
     for r in rows:
-        grouped[r["dataset_name"]].append((r["pred_answer"], r["gold_answer"]))
+        pair = (r["pred_answer"], r["gold_answer"])
+        grouped[r["dataset_name"]].append(pair)
+        all_pairs.append(pair)
 
-    per_dataset = {}
-    for ds, pairs in grouped.items():
+    metrics_list = []
+
+    # 2. Calculate per-dataset metrics
+    for ds_name, pairs in grouped.items():
         em, f1 = compute_em_f1(pairs)
-        per_dataset[ds] = {"em": float(em), "f1": float(f1), "n": len(pairs)}
+        metrics_list.append({
+            "dataset_name": ds_name,
+            "n": len(pairs),
+            "em": em,
+            "f1": f1
+        })
+    
+    # 3. Calculate Overall metrics (Micro-average)
+    if all_pairs:
+        ov_em, ov_f1 = compute_em_f1(all_pairs)
+        metrics_list.append({
+            "dataset_name": "__OVERALL__",
+            "n": len(all_pairs),
+            "em": ov_em,
+            "f1": ov_f1
+        })
 
-    macro_avg_em = 0.0
-    if per_dataset:
-        macro_avg_em = sum(v["em"] for v in per_dataset.values()) / len(per_dataset)
-
-    return per_dataset, float(macro_avg_em)
-
+    # Sort alphabetically
+    metrics_list.sort(key=lambda x: x["dataset_name"])
+    
+    return metrics_list
 
 # ==============================================================================
 # HELPER GENERATION FUNCTION
@@ -97,22 +107,16 @@ def generate_until_answer(
 ) -> str:
     """
     Generates output and, if </answer> is missing, retries by increasing max_new_tokens.
-    If it still fails after retries, returns the last output (which might be incomplete).
     """
     cur = max_new_tokens
-    # First attempt
     out = llm.generate(prompt=prompt, max_new_tokens=cur, temperature=temperature, top_p=top_p)
 
     for r in range(max_retries):
-        # Check for closing tag (case-insensitive)
         if "</answer>" in out.lower():
             return out
         
-        # Increase token limit
         cur = min(int(cur * growth), hard_cap)
         print(f"    [WARN] Missing </answer>. Retrying with max_new_tokens={cur} (retry {r+1}/{max_retries})")
-        
-        # Retry generation with increased tokens
         out = llm.generate(prompt=prompt, max_new_tokens=cur, temperature=temperature, top_p=top_p)
 
     return out
@@ -132,11 +136,9 @@ def generate_with_actor_critic_loop(
 ) -> Dict[str, str]:
     """
     Executes the 3-stage pipeline.
-    Stage 3 uses `generate_until_answer` to ensure the model has enough tokens to finish.
     """
 
-    # === STAGE 1: THE ACTOR (Original Prompt) ===
-    # Using standard generation here as we parse roughly
+    # === STAGE 1: THE ACTOR ===
     raw_stage_1 = llm.generate(
         prompt=original_prompt,
         max_new_tokens=1024, 
@@ -150,7 +152,7 @@ def generate_with_actor_critic_loop(
     if not draft_reasoning: draft_reasoning = raw_stage_1
     if not draft_timeline: draft_timeline = "Timeline tag missing in draft."
 
-    # === STAGE 2: THE CRITIC (Reflection) ===
+    # === STAGE 2: THE CRITIC ===
     critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
         question=question,
         context=context,
@@ -158,7 +160,6 @@ def generate_with_actor_critic_loop(
         draft_timeline=draft_timeline
     )
 
-    # Reflection is usually short, 512 is plenty
     raw_stage_2 = llm.generate(
         prompt=critic_prompt,
         max_new_tokens=512, 
@@ -169,7 +170,7 @@ def generate_with_actor_critic_loop(
     critic_reflection = extract_section(raw_stage_2, "reflection")
     if not critic_reflection: critic_reflection = raw_stage_2 
 
-    # === STAGE 3: THE FINAL SOLVER (With Adaptive Retry) ===
+    # === STAGE 3: THE FINAL SOLVER ===
     final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
         question=question,
         context=context,
@@ -178,11 +179,10 @@ def generate_with_actor_critic_loop(
         critic_reflection=critic_reflection
     )
     
-    # Use the robust generation function specifically for the final answer
     raw_stage_3 = generate_until_answer(
         llm=llm,
         prompt=final_prompt,
-        max_new_tokens=256, # Start small
+        max_new_tokens=256,
         temperature=temperature,
         top_p=top_p,
         max_retries=max_retries,
@@ -199,9 +199,6 @@ def generate_with_actor_critic_loop(
         "stage1_raw": raw_stage_1,
         "stage2_raw": raw_stage_2,
         "stage3_raw": raw_stage_3,
-        "draft_reasoning": draft_reasoning,
-        "draft_timeline": draft_timeline,
-        "critic_reflection": critic_reflection
     }
 
 
@@ -238,25 +235,24 @@ def main():
     print(f"[INFO] Initializing Unified Model (Actor+Critic)...")
     llm = build_model(mode=args.mode, lora_path=args.lora)
 
-    preds_gold = []
     csv_rows = []
+    
+    # Determine default tag if not provided
+    run_tag = args.tag if args.tag else ("ft_critic_loop" if args.lora else "base_critic_loop")
 
     for i, ex in enumerate(examples, start=1):
         print(f"\n--- [{i}/{len(examples)}] Processing qid={ex.question_id} ---")
 
-        # --- SELEZIONE PROMPT DINAMICA ---
+        # Dynamic Prompt Selection
         if args.lora:
-            
-            # Costruiamo il prompt corto
             actor_prompt = ACTOR_FINETUNED_TEMPLATE.format(
                 question=ex.question,
                 context=ex.context
             )
-            
         else:
             actor_prompt = ex.prompt
 
-        # Esegui la pipeline
+        # Execute Pipeline
         result = generate_with_actor_critic_loop(
             llm=llm,
             original_prompt=actor_prompt, 
@@ -266,21 +262,19 @@ def main():
             top_p=GEN_TOP_P,
             max_retries=args.max_retries
         )
-
         
         gold = ex.answer
         pred_answer = result["final_answer"]
         
         print(f"  Gold: {gold} | Pred: {pred_answer}")
-        
-        preds_gold.append((pred_answer, gold))
 
+        # Combine Raw outputs and Flatten
         combined_raw_output = (
-            f"--- [STAGE 1: GENERATOR] ---\n{result['stage1_raw']}\n\n"
-            f"--- [STAGE 2: CRITIC] ---\n{result['stage2_raw']}\n\n"
-            f"--- [STAGE 3: SOLVER] ---\n{result['stage3_raw']}"
+            f"[STAGE 1: ACTOR] {result['stage1_raw']} "
+            f"[STAGE 2: CRITIC] {result['stage2_raw']} "
+            f"[STAGE 3: SOLVER] {result['stage3_raw']}"
         )
-
+        
         has_answer_tag = "<answer>" in result["stage3_raw"].lower()
 
         csv_rows.append({
@@ -290,68 +284,49 @@ def main():
             "question": ex.question,
             "gold_answer": gold,
             "pred_answer": pred_answer,
-            "raw_output": combined_raw_output,
+            "raw_output": flatten_text(combined_raw_output), # FLATTENED HERE
             "has_answer_tag": has_answer_tag
         })
 
-    em, f1 = compute_em_f1(preds_gold)
-    print(f"\n[RESULTS] EM = {em:.4f}, F1 = {f1:.4f}")
+    # --- Metrics Computation (Aligned with Ablation Script) ---
+    stats_list = compute_detailed_metrics(csv_rows)
 
-        # ---- Per-dataset metrics + Macro Avg (like Table 4) ----
-    per_ds, macro_avg_em = compute_metrics_by_dataset(csv_rows)
+    print("\n[RESULTS SUMMARY]")
+    for stat in stats_list:
+        print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f}")
 
-    print("\n[PER-DATASET RESULTS]")
-    for ds in sorted(per_ds.keys()):
-        m = per_ds[ds]
-        print(f"  - {ds:20s} | EM={m['em']:.4f} | F1={m['f1']:.4f} | N={m['n']}")
-
-    print(f"\n[MACRO AVG] MacroAvg EM (unweighted) = {macro_avg_em:.4f}")
-
-    tag = args.tag if args.tag else ("ft_critic_loop" if args.lora else "base_critic_loop")
-    out_csv = RESULTS_DIR / f"actor_critic_results_{tag}.csv"
-    
-    print(f"[INFO] Saving results to: {out_csv}")
+    # --- Save Detailed Logs (Flattened) ---
+    out_csv = RESULTS_DIR / f"actor_critic_results_{run_tag}.csv"
+    print(f"\n[INFO] Saving logs to: {out_csv}")
     
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         fieldnames = [
-            "idx",
-            "dataset_name",
-            "question_id",
-            "question",
-            "gold_answer",
-            "pred_answer",
-            "raw_output",
-            "has_answer_tag"
+            "idx", "dataset_name", "question_id",
+            "question", "gold_answer", "pred_answer",
+            "raw_output", "has_answer_tag"
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(csv_rows)
     
-    summary_csv = RESULTS_DIR / f"actor_critic_summary_{tag}.csv"
+    # --- Save Summary (Vertical Format) ---
+    summary_csv = RESULTS_DIR / f"actor_critic_summary_{run_tag}.csv"
     print(f"[INFO] Saving per-dataset summary to: {summary_csv}")
 
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
+        # Matches the ablation script structure (minus 'variant', using 'tag' instead)
         fieldnames = ["tag", "dataset_name", "n", "em", "f1"]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
-        for ds in sorted(per_ds.keys()):
-            m = per_ds[ds]
+        
+        for stat in stats_list:
             w.writerow({
-                "tag": tag,
-                "dataset_name": ds,
-                "n": m["n"],
-                "em": m["em"],
-                "f1": m["f1"],
+                "tag": run_tag,
+                "dataset_name": stat["dataset_name"],
+                "n": stat["n"],
+                "em": f"{stat['em']:.4f}",
+                "f1": f"{stat['f1']:.4f}",
             })
-        # add macro row
-        w.writerow({
-            "tag": tag,
-            "dataset_name": "__MACRO_AVG__",
-            "n": sum(m["n"] for m in per_ds.values()),
-            "em": macro_avg_em,
-            "f1": "",  # macro F1 isn't defined the same way; keep blank
-        })
-
 
 if __name__ == "__main__":
     main()

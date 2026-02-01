@@ -1,17 +1,18 @@
 """
 CLI Script for TISER Prompt Ablation Study (Single-Prompt Only)
+MODIFIED: Vertical Summary Format (Row per Dataset per Variant) + Flattened Raw Output
 
 - Same LLM for all variants
-- Each ablation variant corresponds to ONE prompt template variable from src.tiser.prompts
-- Each template only needs .format(question=..., context=ex.context)
-- Computes EM per dataset + macro average
-- Saves per-variant CSV logs + one summary CSV
+- Computes EM & F1 per dataset
+- Saves per-variant CSV logs (flattened)
+- Saves ONE summary CSV with vertical structure:
+  [tag, variant, dataset_name, n, em, f1]
 
 Example:
     python scripts/run_ablation_single_prompt.py \
         --test-file data/processed/TISER_test.json \
-        --tag table4_replica \
-        --variants standard,only_reasoning,only_timeline,no_reflection,no_timeline,no_reasoning,all_stages
+        --tag v2_vertical \
+        --variants standard,no_reasoning
 """
 
 import sys
@@ -35,22 +36,19 @@ from src.data.tiser_dataset import load_tiser_file
 from src.tiser.metrics import compute_em_f1
 from src.tiser.parsing import extract_answer
 
-
 # ----------------------------------------------------------------------
-# IMPORT PROMPT VARIABLES (edit names to match your prompts.py)
-# Each is a FULL prompt (single prompt) that contains its own instructions.
+# IMPORT PROMPT VARIABLES
 # ----------------------------------------------------------------------
 from src.tiser.prompts import (
-    STANDARD_PROMPT_TEMPLATE,               # standard prompt
-    ABLATION_ONLY_REASONING_PROMPT_TEMPLATE,         # only reasoning
-    ABLATION_ONLY_TIMELINE_PROMPT_TEMPLATE,          # only timeline construction
-    ABLATION_NO_REFLECTION_PROMPT_TEMPLATE,          # ablation: no reflection
-    ABLATION_NO_TIMELINE_PROMPT_TEMPLATE,            # ablation: no timeline construction
-    ABLATION_NO_REASONING_PROMPT_TEMPLATE,           # ablation: no reasoning
-    TISER_PROMPT_TEMPLATE,             # full TISER prompt
+    STANDARD_PROMPT_TEMPLATE,               
+    ABLATION_ONLY_REASONING_PROMPT_TEMPLATE,         
+    ABLATION_ONLY_TIMELINE_PROMPT_TEMPLATE,          
+    ABLATION_NO_REFLECTION_PROMPT_TEMPLATE,          
+    ABLATION_NO_TIMELINE_PROMPT_TEMPLATE,            
+    ABLATION_NO_REASONING_PROMPT_TEMPLATE,           
+    TISER_PROMPT_TEMPLATE,             
 )
 
-# Map: variant_name -> template_variable
 VARIANT_PROMPTS: Dict[str, str] = {
     "standard": STANDARD_PROMPT_TEMPLATE,
     "only_reasoning": ABLATION_ONLY_REASONING_PROMPT_TEMPLATE,
@@ -61,9 +59,57 @@ VARIANT_PROMPTS: Dict[str, str] = {
     "all_stages": TISER_PROMPT_TEMPLATE,
 }
 
+# ======================================================================
+# UTILITIES
+# ======================================================================
+
 def flatten_text(text: str) -> str:
+    """Flatten newlines for single-line CSV logging."""
+    if not text: return ""
     return text.replace("\n", " ").replace("\r", " ")
 
+def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Computes EM and F1 for each dataset AND an overall aggregate.
+    Returns a list of dictionaries ready for the summary CSV.
+    """
+    # 1. Group by dataset
+    grouped = defaultdict(list)
+    all_pairs = []
+    
+    for r in rows:
+        pair = (r["pred_answer"], r["gold_answer"])
+        grouped[r["dataset_name"]].append(pair)
+        all_pairs.append(pair)
+
+    metrics_list = []
+
+    # 2. Calculate per-dataset metrics
+    for ds_name, pairs in grouped.items():
+        em, f1 = compute_em_f1(pairs)
+        metrics_list.append({
+            "dataset_name": ds_name,
+            "n": len(pairs),
+            "em": em,
+            "f1": f1
+        })
+    
+    # 3. Calculate Overall metrics (Micro-average essentially)
+    if all_pairs:
+        ov_em, ov_f1 = compute_em_f1(all_pairs)
+        metrics_list.append({
+            "dataset_name": "__OVERALL__",
+            "n": len(all_pairs),
+            "em": ov_em,
+            "f1": ov_f1
+        })
+
+    # Sort so datasets appear alphabetically, but keep OVERALL at the end if you want
+    # (Here simply sorting by name puts __OVERALL__ at the top or bottom depending on ASCII,
+    # usually we might want to sort explicitly).
+    metrics_list.sort(key=lambda x: x["dataset_name"])
+    
+    return metrics_list
 
 # ======================================================================
 # GENERATION HELPERS
@@ -91,33 +137,13 @@ def generate_until_answer(
 
     return out
 
-
-# ======================================================================
-# METRICS
-# ======================================================================
-
-def compute_em_by_dataset(rows: List[Dict[str, Any]]) -> Tuple[Dict[str, float], float]:
-    grouped: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
-    for r in rows:
-        grouped[r["dataset_name"]].append((r["pred_answer"], r["gold_answer"]))
-
-    em_per_ds: Dict[str, float] = {}
-    for ds, pairs in grouped.items():
-        em, _ = compute_em_f1(pairs)
-        em_per_ds[ds] = float(em)
-
-    macro_avg = sum(em_per_ds.values()) / len(em_per_ds) if em_per_ds else 0.0
-    return em_per_ds, float(macro_avg)
-
-
 # ======================================================================
 # MODEL
 # ======================================================================
 
-def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
+def build_model(mode: str = "dev") -> LLMWrapper:
     model_name = get_model_name(mode=mode, lang="en", role="actor")
     return LLMWrapper(model_name=model_name)
-
 
 # ======================================================================
 # MAIN
@@ -126,7 +152,7 @@ def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrappe
 DEFAULT_VARIANTS = ["standard", "only_reasoning", "only_timeline", "no_reflection", "no_timeline", "no_reasoning", "all_stages"]
 
 def main():
-    parser = argparse.ArgumentParser(description="TISER Ablation Runner (Single Prompt per Variant)")
+    parser = argparse.ArgumentParser(description="TISER Ablation Runner (Vertical Summary)")
     parser.add_argument("--mode", type=str, default="dev", choices=["dev", "train"])
     parser.add_argument("--test-file", type=str, required=True, help="Path to JSON/JSONL test file")
     parser.add_argument("--max-examples", type=int, default=None)
@@ -156,7 +182,8 @@ def main():
     print(f"[INFO] Initializing model (mode={args.mode})")
     llm = build_model(mode=args.mode)
 
-    summary_rows: List[Dict[str, Any]] = []
+    # This list will hold rows for the final SUMMARY csv
+    global_summary_rows: List[Dict[str, Any]] = []
 
     for variant in variants:
         print(f"\n==============================")
@@ -165,17 +192,13 @@ def main():
 
         prompt_template = VARIANT_PROMPTS[variant]
         variant_rows: List[Dict[str, Any]] = []
-        preds_gold_all: List[Tuple[str, str]] = []
-
+        
         for i, ex in enumerate(examples, start=1):
             print(f"  [{i}/{len(examples)}] qid={ex.question_id} ({ex.dataset_name})")
 
             question = ex.question
             context = ex.context
-
-            template_to_use = prompt_template
-
-            prompt = template_to_use.format(question=question, context=context)
+            prompt = prompt_template.format(question=question, context=context)
 
             raw = generate_until_answer(
                 llm=llm,
@@ -192,8 +215,7 @@ def main():
             has_answer_tag = False if pred_answer == "" else True
             gold = ex.answer
 
-            preds_gold_all.append((pred_answer, gold))
-
+            # Store log row
             variant_rows.append({
                 "idx": i,
                 "variant": variant,
@@ -202,20 +224,13 @@ def main():
                 "question": question,
                 "gold_answer": gold,
                 "pred_answer": pred_answer,
-                "raw_output": flatten_text(raw),
+                "raw_output": flatten_text(raw), # FLATTENED as requested
                 "has_answer_tag": has_answer_tag,
             })
 
-        em_all, f1_all = compute_em_f1(preds_gold_all)
-        em_per_ds, macro_avg = compute_em_by_dataset(variant_rows)
-
-        print(f"\n[RESULTS:{variant}] overall EM={em_all:.4f} | F1={f1_all:.4f}")
-        print(f"[RESULTS:{variant}] macro avg (per-dataset EM avg) = {macro_avg:.4f}")
-        for ds, emv in sorted(em_per_ds.items()):
-            print(f"  - {ds}: EM={emv:.4f}")
-
+        # --- 1. Save detailed logs for this variant ---
         out_csv = RESULTS_DIR / f"ablation_{args.tag}_{variant}.csv"
-        print(f"[INFO] Saving logs -> {out_csv}")
+        print(f"[INFO] Saving detailed logs -> {out_csv}")
         with out_csv.open("w", encoding="utf-8", newline="") as f:
             fieldnames = [
                 "idx", "variant", "dataset_name", "question_id",
@@ -226,34 +241,35 @@ def main():
             w.writeheader()
             w.writerows(variant_rows)
 
-        row = {
-            "tag": args.tag,
-            "variant": variant,
-            "overall_em": float(em_all),
-            "overall_f1": float(f1_all),
-            "macro_avg_em": float(macro_avg),
-        }
-        for ds, emv in em_per_ds.items():
-            row[f"em__{ds}"] = float(emv)
-        summary_rows.append(row)
+        # --- 2. Compute Metrics (Dataset-wise + Overall) ---
+        stats_list = compute_detailed_metrics(variant_rows)
+        
+        # Add these stats to the global summary list
+        print(f"[METRICS] Summary for {variant}:")
+        for stat in stats_list:
+            print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f}")
+            
+            # Construct row for summary CSV
+            global_summary_rows.append({
+                "tag": args.tag,
+                "variant": variant,
+                "dataset_name": stat["dataset_name"],
+                "n": stat["n"],
+                "em": f"{stat['em']:.4f}",
+                "f1": f"{stat['f1']:.4f}"
+            })
 
+    # --- 3. Save Global Summary CSV ---
     summary_csv = RESULTS_DIR / f"ablation_summary_{args.tag}.csv"
-    print(f"\n[INFO] Saving summary -> {summary_csv}")
-
-    all_keys = set()
-    for r in summary_rows:
-        all_keys |= set(r.keys())
-    base_keys = ["tag", "variant", "overall_em", "overall_f1", "macro_avg_em"]
-    extra_keys = sorted([k for k in all_keys if k not in base_keys])
-    fieldnames = base_keys + extra_keys
+    print(f"\n[INFO] Saving global vertical summary -> {summary_csv}")
 
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
+        fieldnames = ["tag", "variant", "dataset_name", "n", "em", "f1"]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
-        w.writerows(summary_rows)
+        w.writerows(global_summary_rows)
 
     print("[DONE] Ablation completed.")
-
 
 if __name__ == "__main__":
     main()
