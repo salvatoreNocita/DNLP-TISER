@@ -1,6 +1,7 @@
 """
 CLI Script for TISER Prompt Ablation Study (Single-Prompt Only)
 MODIFIED: Vertical Summary Format (Row per Dataset per Variant) + Flattened Raw Output
+MODIFIED: Added --lora-path support for Fine-Tuned models
 
 - Same LLM for all variants
 - Computes EM & F1 per dataset
@@ -12,7 +13,8 @@ Example:
     python scripts/run_ablation_single_prompt.py \
         --test-file data/processed/TISER_test.json \
         --tag v2_vertical \
-        --variants standard,no_reasoning
+        --variants standard,no_reasoning \
+        --lora-path /path/to/checkpoints/checkpoint-100
 """
 
 import sys
@@ -104,9 +106,7 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             "f1": ov_f1
         })
 
-    # Sort so datasets appear alphabetically, but keep OVERALL at the end if you want
-    # (Here simply sorting by name puts __OVERALL__ at the top or bottom depending on ASCII,
-    # usually we might want to sort explicitly).
+    # Sort so datasets appear alphabetically
     metrics_list.sort(key=lambda x: x["dataset_name"])
     
     return metrics_list
@@ -141,9 +141,21 @@ def generate_until_answer(
 # MODEL
 # ======================================================================
 
-def build_model(mode: str = "dev") -> LLMWrapper:
+def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
+    """
+    Builds the model wrapper.
+    If lora_path is provided, it is passed to the LLMWrapper.
+    """
     model_name = get_model_name(mode=mode, lang="en", role="actor")
-    return LLMWrapper(model_name=model_name)
+    
+    print(f"[MODEL] Base model: {model_name}")
+    if lora_path:
+        print(f"[MODEL] Loading LoRA adapter from: {lora_path}")
+        # NOTE: Ensure your LLMWrapper accepts 'lora_path' or modify the key below 
+        # to match your implementation (e.g., peft_model_id, adapter_path).
+        return LLMWrapper(model_name=model_name, lora_path=lora_path)
+    else:
+        return LLMWrapper(model_name=model_name)
 
 # ======================================================================
 # MAIN
@@ -161,6 +173,7 @@ def main():
     parser.add_argument("--top-p", type=float, default=GEN_TOP_P)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--variants", type=str, default=",".join(DEFAULT_VARIANTS))
+    parser.add_argument("--lora-path", type=str, default=None, help="Path to fine-tuned LoRA adapter (optional)")
 
     args = parser.parse_args()
 
@@ -180,7 +193,8 @@ def main():
     print(f"[INFO] Loaded {len(examples)} examples")
 
     print(f"[INFO] Initializing model (mode={args.mode})")
-    llm = build_model(mode=args.mode)
+    # MODIFIED CALL
+    llm = build_model(mode=args.mode, lora_path=args.lora_path)
 
     # This list will hold rows for the final SUMMARY csv
     global_summary_rows: List[Dict[str, Any]] = []
@@ -229,6 +243,7 @@ def main():
             })
 
         # --- 1. Save detailed logs for this variant ---
+        # If lora is used, maybe reflect that in filename or just trust the tag
         out_csv = RESULTS_DIR / f"ablation_{args.tag}_{variant}.csv"
         print(f"[INFO] Saving detailed logs -> {out_csv}")
         with out_csv.open("w", encoding="utf-8", newline="") as f:

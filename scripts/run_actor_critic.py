@@ -35,7 +35,7 @@ from src.data.tiser_dataset import load_tiser_file
 from src.tiser.metrics import compute_em_f1
 from src.tiser.parsing import extract_answer, extract_section
 from src.tiser.prompts import (
-    ACTOR_FINETUNED_TEMPLATE,
+    TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
     FINAL_SOLVER_PROMPT_TEMPLATE
 )
@@ -243,14 +243,10 @@ def main():
     for i, ex in enumerate(examples, start=1):
         print(f"\n--- [{i}/{len(examples)}] Processing qid={ex.question_id} ---")
 
-        # Dynamic Prompt Selection
-        if args.lora:
-            actor_prompt = ACTOR_FINETUNED_TEMPLATE.format(
+        actor_prompt = TISER_PROMPT_TEMPLATE.format(
                 question=ex.question,
                 context=ex.context
             )
-        else:
-            actor_prompt = ex.prompt
 
         # Execute Pipeline
         result = generate_with_actor_critic_loop(
